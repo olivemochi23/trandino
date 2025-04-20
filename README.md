@@ -1,0 +1,88 @@
+# TranDino - Discord翻訳ボット
+
+[![Node.js Version](https://img.shields.io/badge/Node.js-%3E%3D20.0.0-brightgreen)](https://nodejs.org/)
+[![Discord.js Version](https://img.shields.io/badge/Discord.js-v14.18.0-blue)](https://discord.js.org/)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+TranDinoは、Discordサーバー内のメッセージを自動的に検出し、指定された言語（デフォルトは日本語）に翻訳するボットです。
+
+## ✨ 機能
+
+- **自動言語検出:** メッセージの言語を自動的に検出します。
+- **多言語翻訳:** Google Cloud Translation API を使用して、検出された言語から指定された言語へ翻訳します。
+- **スラッシュコマンド:** 設定やステータス確認を簡単に行えるスラッシュコマンドを提供します。
+- **チャンネル設定:** サーバー管理者は、特定のチャンネルを翻訳対象として設定できます。
+- **キャッシュ機能:** 翻訳結果と言語検出結果をキャッシュし、APIの使用量を削減し、応答速度を向上させます。
+- **パフォーマンスモニタリング:** APIの応答時間や成功率、キャッシュヒット率などの統計情報を確認できます。
+
+## ⚙️ セットアップ
+
+### 前提条件
+
+- Node.js v20.0.0 以上
+- npm (Node.jsに同梱)
+- Discord Botアカウント ([Discord Developer Portal](https://discord.com/developers/applications) で作成)
+- Google Cloud Platformアカウント
+    - Cloud Translation API の有効化
+    - APIキーの取得 ([Google Cloud Console](https://console.cloud.google.com/))
+
+### インストール
+
+1.  リポジトリをクローンまたはダウンロードします。
+    ```bash
+    git clone <repository_url>
+    cd <repository_directory>
+    ```
+2.  依存パッケージをインストールします。
+    ```bash
+    npm install
+    ```
+
+### 設定
+
+1.  プロジェクトルートにある `.env.example` ファイルをコピーして `.env` という名前のファイルを作成します。
+    ```bash
+    cp .env.example .env
+    ```
+2.  `.env` ファイルを開き、以下の環境変数を設定します。
+    - `DISCORD_TOKEN`: Discordボットのトークン
+    - `CLIENT_ID`: DiscordボットのクライアントID
+    - `GUILD_ID`: (開発時) テストサーバーのID
+    - `GOOGLE_API_KEY`: Google Cloud Translation APIのAPIキー
+    - (オプション) `GOOGLE_PROJECT_ID`: Google CloudプロジェクトID (APIキーの代わりにADCを使用する場合)
+    - (オプション) キャッシュ設定やログレベルなど、その他の設定を必要に応じて変更します。
+
+### スラッシュコマンドの登録
+
+ボットを初めてサーバーに追加した際や、コマンドに変更があった場合は、以下のコマンドを実行してスラッシュコマンドをDiscordに登録する必要があります。
+
+```bash
+npm run deploy-commands
+```
+
+## 🚀 実行
+
+### 通常起動
+
+```bash
+npm start
+```
+
+### 開発モード
+
+コードの変更を監視し、自動的に再起動する開発モードで起動します。
+
+```bash
+npm run dev
+```
+
+## 📖 コマンド
+
+利用可能なスラッシュコマンドの一覧と詳細については、[コマンド一覧ドキュメント (docs/commands.md)](./docs/commands.md) を参照してください。
+
+## 📜 ライセンス
+
+このプロジェクトは [MIT License](./LICENSE) の下で公開されています。
+
+## 📋 運用ガイド
+運用時の各種手順やトラブルシュートは[運用ガイド](./docs/operation_guide.md)をご覧ください。 

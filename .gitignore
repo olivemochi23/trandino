@@ -1,0 +1,37 @@
+# 依存パッケージ
+node_modules/
+
+# 環境変数とAPIキー
+.env
+*.env
+credentials.json
+*-credentials.json
+*-key.json
+service-account-*.json
+
+# ログ
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 実行時データ
+data/
+
+# テスト
+coverage/
+
+# エディタ設定
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS生成ファイル
+.DS_Store
+Thumbs.db
+
+# ビルド成果物
+dist/
+build/
