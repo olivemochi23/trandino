@@ -28,8 +28,10 @@ describe('TranslationService', () => {
   beforeEach(() => {
     jest.resetAllMocks(); // clearAllMocks より強力
 
-    // axios モック設定
-    axios.post = jest.fn().mockResolvedValue({ data: { data: { detections: [[{ language: 'en', confidence: 0.9 }]], translations: [{ translatedText: 'mock translation' }] } } });
+    // axios.get をモックするように修正
+    axios.get = jest.fn().mockResolvedValue({ data: { data: { detections: [[{ language: 'en', confidence: 0.9 }]] } } });
+    // axios.post も必要ならモック (translateText用)
+    axios.post = jest.fn().mockResolvedValue({ data: { data: { translations: [{ translatedText: 'mock translation' }] } } });
 
     // performanceMonitor のモックを作成
     mockPerformanceMonitor = {
@@ -60,21 +62,25 @@ describe('TranslationService', () => {
   afterAll(() => {
     jest.restoreAllMocks();
     // 非同期処理のすべてのモックをクリア
-    if (axios.post.mockRestore) {
+    if (axios.get?.mockRestore) {
+      axios.get.mockRestore();
+    }
+    if (axios.post?.mockRestore) {
       axios.post.mockRestore();
     }
   });
 
   describe('detectLanguage', () => {
     test('正しく言語を検出すること', async () => {
-      axios.post.mockResolvedValueOnce({ data: { data: { detections: [[{ language: 'ja', confidence: 0.98 }]] } } });
+      // axios.get のモック応答を設定
+      axios.get.mockResolvedValueOnce({ data: { data: { detections: [[{ language: 'ja', confidence: 0.98 }]] } } });
       const result = await service.detectLanguage('こんにちは');
       expect(result.language).toBe('ja');
       expect(result.confidence).toBe(0.98);
-      expect(axios.post).toHaveBeenCalledWith(
+      // axios.get が呼ばれたことを確認
+      expect(axios.get).toHaveBeenCalledWith(
         'https://mock-translation.googleapis.com/language/translate/v2/detect',
-        { q: 'こんにちは' },
-        { params: { key: 'test-api-key' } }
+        { params: { key: 'test-api-key', q: 'こんにちは' } }
       );
       // performanceMonitor のメソッドが呼ばれたか確認
       expect(mockPerformanceMonitor.startTimer).toHaveBeenCalled();
@@ -89,18 +95,19 @@ describe('TranslationService', () => {
 
   describe('translateText', () => {
     test('正しくテキストを翻訳すること (言語検出あり)', async () => {
-      // 言語検出のモック応答
-      axios.post.mockResolvedValueOnce({ data: { data: { detections: [[{ language: 'en', confidence: 0.95 }]] } } });
-      // 翻訳のモック応答
+      // 言語検出のモック応答 (axios.get)
+      axios.get.mockResolvedValueOnce({ data: { data: { detections: [[{ language: 'en', confidence: 0.95 }]] } } });
+      // 翻訳のモック応答 (axios.post)
       axios.post.mockResolvedValueOnce({ data: { data: { translations: [{ translatedText: 'こんにちは' }] } } });
 
       const result = await service.translateText('Hello', 'ja');
 
       expect(result.translatedText).toBe('こんにちは');
       expect(result.sourceLanguage).toBe('en');
-      expect(axios.post).toHaveBeenCalledTimes(2); // detect と translate で2回呼ばれる
-      // 2回目の呼び出し (translate) の引数を検証
-      expect(axios.post).toHaveBeenNthCalledWith(2,
+      expect(axios.get).toHaveBeenCalledTimes(1); // detect
+      expect(axios.post).toHaveBeenCalledTimes(1); // translate
+      // translate の呼び出し引数を検証 (axios.postは1回目なのでNth=1)
+      expect(axios.post).toHaveBeenNthCalledWith(1,
         'https://mock-translation.googleapis.com/language/translate/v2',
         { q: 'Hello', source: 'en', target: 'ja', format: 'text' },
         { params: { key: 'test-api-key' } }
@@ -113,12 +120,16 @@ describe('TranslationService', () => {
     });
 
     test('翻訳元と翻訳先が同じ言語の場合は API を呼ばずに返すこと', async () => {
-       axios.post.mockResolvedValueOnce({ data: { data: { detections: [[{ language: 'ja', confidence: 0.99 }]] } } });
+       // detectLanguage のモックをより詳細に設定
+       axios.get.mockResolvedValueOnce({ data: { data: { detections: [[{ language: 'ja', confidence: 0.99 }]] } } });
+       // detectLanguage が返す形式に合わせてモックを作成
+       // jest.spyOn(service, 'detectLanguage').mockResolvedValue({ language: 'ja', confidence: 0.99, fromCache: false });
 
        const result = await service.translateText('こんにちは', 'ja');
        expect(result.translatedText).toBe('こんにちは');
        expect(result.sourceLanguage).toBe('ja');
-       expect(axios.post).toHaveBeenCalledTimes(1); // detect のみ
+       expect(axios.get).toHaveBeenCalledTimes(1); // detect のみ
+       expect(axios.post).not.toHaveBeenCalled(); // translate は呼ばれない
     });
 
     test('空文字列の場合はエラーをスローすること', async () => {
@@ -163,6 +174,36 @@ describe('TranslationService', () => {
       };
        const result = service.formatTranslationResult(originalText, translationResult);
        expect(result.embeds[0].title).toContain('[翻訳: キャッシュ, 言語検出: キャッシュ]');
+    });
+  });
+
+  describe('_withRetry', () => {
+    test('一度失敗してから成功するまでリトライすること', async () => {
+      // 最初の呼び出しで500エラー、2回目で成功
+      const error500 = { response: { status: 500 } };
+      const mockFn = jest.fn()
+        .mockRejectedValueOnce(error500)
+        .mockResolvedValue('ok');
+      const result = await service._withRetry(mockFn, 2, 0);
+      expect(result).toBe('ok');
+      expect(mockFn).toHaveBeenCalledTimes(2);
+    });
+
+    test('リトライ回数を超えたらエラーをスローすること', async () => {
+      // 常に503エラーを返す
+      const error503 = { response: { status: 503 } };
+      const mockFn = jest.fn().mockRejectedValue(error503);
+      await expect(service._withRetry(mockFn, 2, 0)).rejects.toEqual(error503);
+      // initial + リトライ2回
+      expect(mockFn).toHaveBeenCalledTimes(3);
+    });
+
+    test('400エラーなどリトライ対象外のエラーは一度で止まること', async () => {
+      // 400エラーはリトライしない
+      const error400 = { response: { status: 400 } };
+      const mockFn = jest.fn().mockRejectedValue(error400);
+      await expect(service._withRetry(mockFn, 3, 0)).rejects.toEqual(error400);
+      expect(mockFn).toHaveBeenCalledTimes(1);
     });
   });
 }); 

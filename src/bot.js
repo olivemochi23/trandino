@@ -104,7 +104,8 @@ export class Bot {
 
     // メッセージ受信時
     this.client.on(Events.MessageCreate, this.handleMessage.bind(this));
-    
+    // メッセージ編集時（追加）
+    this.client.on(Events.MessageUpdate, this.handleMessageUpdate.bind(this));
     // スラッシュコマンド処理
     this.client.on(Events.InteractionCreate, this.handleInteraction.bind(this));
   }
@@ -114,8 +115,8 @@ export class Bot {
    * @param {Object} message - Discordメッセージオブジェクト
    */
   async handleMessage(message) {
-    // 自分のメッセージやBotのメッセージは処理しない
-    if (message.author.bot) return;
+    // 自分自身のメッセージは処理しない
+    if (message.author.id === this.client.user.id) return;
     
     // DMは処理しない
     if (!message.guild) {
@@ -125,25 +126,26 @@ export class Bot {
     
     try {
       const guildId = message.guild.id;
-      // settingsServiceではなくchannelManagerを使用
-      const guildSettings = await this.channelManager.getGuildSettings(guildId);
-      
-      // 翻訳先チャンネルが設定されていない場合は処理しない
-      if (!guildSettings.targetChannelId) {
-        logger.debug('翻訳先チャンネルが設定されていません', { guildId });
+      const channelId = message.channel.id;
+      // 翻訳対象チャンネルかチェック
+      const isEnabled = await this.channelManager.isEnabledChannel(guildId, channelId);
+      if (!isEnabled) {
+        logger.debug('翻訳対象チャンネルではありません', { guildId, channelId });
         return;
       }
       
-      // 翻訳先チャンネルがソースチャンネルと同じ場合は処理しない
-      if (message.channel.id === guildSettings.targetChannelId) {
-        logger.debug('ソースチャンネルと翻訳先チャンネルが同じため処理しません', { channelId: message.channel.id });
-        return;
+      // contentが空でもembedからテキスト抽出
+      let content = message.content;
+      if ((!content || !content.trim()) && message.embeds.length > 0) {
+        // 最初のembedのdescriptionやfieldsからテキストを抽出
+        const embed = message.embeds[0];
+        content = embed.description || '';
+        if (embed.fields && embed.fields.length > 0) {
+          content += '\n' + embed.fields.map(f => f.value).join('\n');
+        }
       }
-      
-      const content = message.content;
-      
       // 空のメッセージは処理しない
-      if (!content || content.trim() === '') {
+      if (!content || !content.trim()) {
         logger.debug('空のメッセージは処理しません', { messageId: message.id });
         return;
       }
@@ -160,63 +162,34 @@ export class Bot {
         messageId: message.id,
         fromCache: languageFromCache 
       });
-      
-      // 検出された言語が翻訳対象外の場合は処理しない
-      if (!guildSettings.translateFrom.includes(detectedLanguage) && 
-          guildSettings.translateFrom.length > 0) {
-        logger.debug('検出された言語は翻訳対象外です', { 
-          language: detectedLanguage, 
-          allowedLanguages: guildSettings.translateFrom 
-        });
+      // 日本語の場合は翻訳不要
+      if (detectedLanguage === this.translationService.defaultTargetLanguage) {
+        logger.debug('検出された言語がデフォルト対象言語と同じため処理しません', { language: detectedLanguage });
         return;
       }
-      
       // 信頼度が低い場合は処理しない
-      if (confidence < guildSettings.minConfidence) {
-        logger.debug('言語検出の信頼度が低いため処理しません', { 
-          confidence, 
-          minConfidence: guildSettings.minConfidence 
-        });
+      if (confidence < 0.7) {
+        logger.debug('言語検出の信頼度が低いため処理しません', { confidence });
         return;
       }
-      
-      // 翻訳先の言語
-      const targetLanguage = guildSettings.targetLanguage;
-      
-      // 検出された言語が翻訳先言語と同じ場合は処理しない
-      if (detectedLanguage === targetLanguage) {
-        logger.debug('検出された言語が翻訳先言語と同じため処理しません', { 
-          language: detectedLanguage, 
-          targetLanguage 
-        });
-        return;
-      }
-      
-      // 翻訳実行
+      // 翻訳実行 (デフォルトターゲット言語へ変換)
       const startTranslation = performance.now();
       const translationResult = await this.translationService.translateText(
-        content, 
-        detectedLanguage, 
-        targetLanguage
+        content,
+        this.translationService.defaultTargetLanguage,
+        detectedLanguage
       );
       const translationTime = performance.now() - startTranslation;
       
       logger.info('翻訳実行', { 
-        sourceLanguage: detectedLanguage, 
-        targetLanguage, 
+        sourceLanguage: this.translationService.defaultTargetLanguage, 
+        targetLanguage: detectedLanguage, 
         messageId: message.id, 
         timeMs: translationTime.toFixed(2),
         fromCache: translationResult.fromCache 
       });
       
-      // 翻訳先チャンネルを取得
-      const targetChannel = await this.client.channels.fetch(guildSettings.targetChannelId);
-      if (!targetChannel) {
-        logger.error('翻訳先チャンネルが見つかりません', { channelId: guildSettings.targetChannelId });
-        return;
-      }
-      
-      // 翻訳結果を送信
+      // 翻訳結果を送信（同一チャンネル）
       const result = {
         sourceLanguage: detectedLanguage,
         translatedText: translationResult.translatedText,
@@ -245,12 +218,11 @@ export class Bot {
         }
       }
       
-      await targetChannel.send(formattedMessage);
+      await message.channel.send(formattedMessage);
       
       // 成功したことをログに記録
       logger.info('翻訳メッセージを送信しました', { 
-        sourceChannelId: message.channel.id, 
-        targetChannelId: targetChannel.id, 
+        channelId: message.channel.id, 
         messageId: message.id 
       });
     } catch (error) {
@@ -260,6 +232,25 @@ export class Bot {
         messageId: message.id 
       });
     }
+  }
+  
+  /**
+   * メッセージ編集時の処理
+   * @param {Object} oldMessage - 編集前のメッセージ
+   * @param {Object} newMessage - 編集後のメッセージ
+   */
+  async handleMessageUpdate(oldMessage, newMessage) {
+    // partialの場合はfetch
+    if (newMessage.partial) {
+      try {
+        newMessage = await newMessage.fetch();
+      } catch (e) {
+        logger.error('メッセージのfetchに失敗', { error: e });
+        return;
+      }
+    }
+    // 通常のメッセージ処理と同じロジックを使う
+    await this.handleMessage(newMessage);
   }
   
   /**

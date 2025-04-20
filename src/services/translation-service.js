@@ -28,6 +28,26 @@ export class TranslationService {
     logger.info('翻訳サービスを初期化しました');
   }
   
+  // API呼び出し用のリトライロジックを追加
+  async _withRetry(requestFn, retries = 3, delay = 500) {
+    let attempt = 0;
+    while (true) {
+      try {
+        return await requestFn();
+      } catch (error) {
+        attempt++;
+        const status = error.response?.status;
+        // 429 (Too Many Requests) または 5xx はリトライ
+        if (attempt > retries || !(status === 429 || (status >= 500 && status < 600))) {
+          throw error;
+        }
+        const waitTime = delay * Math.pow(2, attempt - 1);
+        logger.warn(`リクエスト失敗 (status: ${status}), リトライ ${attempt}/${retries} を ${waitTime}ms 後に実行します`);
+        await new Promise(res => setTimeout(res, waitTime));
+      }
+    }
+  }
+  
   /**
    * テキストの言語を検出する
    * @param {string} text - 検出するテキスト
@@ -51,13 +71,10 @@ export class TranslationService {
       }
       
       // キャッシュになければAPIを呼び出し
-      const response = await axios.post(`${this.apiUrl}/detect`, {
-        q: text
-      }, {
-        params: {
-          key: this.apiKey
-        }
-      });
+      const response = await this._withRetry(() => axios.get(
+        `${this.apiUrl}/detect`,
+        { params: { key: this.apiKey, q: text } }
+      ));
       
       const detectionResult = response.data.data.detections[0][0];
       const detectedLanguage = detectionResult.language;
@@ -143,16 +160,16 @@ export class TranslationService {
       }
       
       // キャッシュになければAPIを呼び出し
-      const response = await axios.post(`${this.apiUrl}`, {
-        q: text,
-        source: detectedSourceLanguage,
-        target: targetLanguage,
-        format: 'text'
-      }, {
-        params: {
-          key: this.apiKey
-        }
-      });
+      const response = await this._withRetry(() => axios.post(
+        `${this.apiUrl}`,
+        {
+          q: text,
+          source: detectedSourceLanguage,
+          target: targetLanguage,
+          format: 'text'
+        },
+        { params: { key: this.apiKey } }
+      ));
       
       const translatedText = response.data.data.translations[0].translatedText;
       
@@ -235,14 +252,6 @@ export class TranslationService {
         color: color,
         title: `${languageName}から日本語に翻訳 ${cacheText}`,
         description: translatedText,
-        fields: [
-          {
-            name: '元のテキスト',
-            value: originalText.length > 1024 
-              ? originalText.substring(0, 1021) + '...' 
-              : originalText
-          }
-        ],
         footer: {
           text: confidenceText
         },

@@ -34,10 +34,11 @@ describe('Translation Service (Root Test)', () => {
   let mockPerformanceMonitor; // モックの performanceMonitor
 
   beforeEach(() => {
-    jest.resetAllMocks(); // clearAllMocks より強力
+    jest.resetAllMocks();
 
-    // axios モック設定
-    axios.post = jest.fn().mockResolvedValue({ data: { data: { detections: [[{ language: 'en', confidence: 0.9 }]], translations: [{ translatedText: 'mock translation' }] } } });
+    // axios をモック化
+    axios.get = jest.fn().mockResolvedValue({ data: { data: { detections: [[{ language: 'en', confidence: 0.9 }]] } } }); // detectLanguage 用
+    axios.post = jest.fn().mockResolvedValue({ data: { data: { translations: [{ translatedText: 'mock translation' }] } } }); // translateText 用
 
     // performanceMonitor のモックを作成
     mockPerformanceMonitor = {
@@ -76,23 +77,30 @@ describe('Translation Service (Root Test)', () => {
   });
 
   it('should translate text correctly using mocked axios', async () => {
-    const text = 'Hello';
+    const textToTranslate = 'Hello';
     const targetLanguage = 'ja';
-    const expectedTranslation = 'mock translation from test'; // テスト固有の応答
 
-    // 言語検出のモック応答を設定
-    axios.post.mockResolvedValueOnce({ data: { data: { detections: [[{ language: 'en', confidence: 0.95 }]] } } });
-    // 翻訳のモック応答を設定
-    axios.post.mockResolvedValueOnce({ data: { data: { translations: [{ translatedText: expectedTranslation }] } } });
+    // モックの応答を設定
+    axios.get.mockResolvedValueOnce({ data: { data: { detections: [[{ language: 'en', confidence: 0.95 }]] } } }); // detect
+    axios.post.mockResolvedValueOnce({ data: { data: { translations: [{ translatedText: 'こんにちは' }] } } }); // translate
 
-    const result = await translationService.translateText(text, targetLanguage);
+    const result = await translationService.translateText(textToTranslate, targetLanguage);
 
-    expect(result.translatedText).toBe(expectedTranslation);
-    expect(axios.post).toHaveBeenCalledTimes(2);
-    // 2回目の呼び出し (translate) の引数を検証
-    expect(axios.post).toHaveBeenNthCalledWith(2,
+    expect(result.translatedText).toBe('こんにちは');
+    expect(result.sourceLanguage).toBe('en');
+    // API呼び出しの検証
+    expect(axios.get).toHaveBeenCalledTimes(1); // detect
+    expect(axios.post).toHaveBeenCalledTimes(1); // translate
+
+    // detect の呼び出し
+    expect(axios.get).toHaveBeenNthCalledWith(1,
+      'https://mock-translation.googleapis.com/language/translate/v2/detect',
+      { params: { key: 'test-api-key', q: textToTranslate } }
+    );
+    // translate の呼び出し
+    expect(axios.post).toHaveBeenNthCalledWith(1,
       'https://mock-translation.googleapis.com/language/translate/v2',
-      { q: text, source: 'en', target: targetLanguage, format: 'text' },
+      { q: textToTranslate, source: 'en', target: targetLanguage, format: 'text' },
       { params: { key: 'test-api-key' } }
     );
     // performanceMonitor のメソッドが呼ばれたか確認

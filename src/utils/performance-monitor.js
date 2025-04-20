@@ -275,6 +275,23 @@ class PerformanceMonitor {
     }
   }
 
+  /**
+   * タイマー開始用メソッド
+   * @returns {number} 現在のタイムスタンプ
+   */
+  startTimer() {
+    return Date.now();
+  }
+
+  /**
+   * タイマー終了用メソッド
+   * @param {number} startTime - Timer開始時のタイムスタンプ
+   * @returns {number} 経過ミリ秒
+   */
+  endTimer(startTime) {
+    return Date.now() - startTime;
+  }
+
   // API統計用のプロパティを追加
   apiStats = {
     translate: {
