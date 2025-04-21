@@ -90,56 +90,68 @@ npm start
 npm run dev
 ```
 
-## ☁️ GCP (Cloud Run) へのデプロイ
-
-このボットは Google Cloud Run にデプロイして運用することを推奨します。
+## ☁️ GCP (Compute Engine + Docker) での運用（2025年4月最新ベストプラクティス）
 
 ### 前提条件
-
-- 上記「セットアップ」の前提条件を満たしていること。
-- GCPプロジェクトで課金が有効になっていること。
-- Dockerイメージをプッシュするための Artifact Registry リポジトリが作成されていること (例: `asia-northeast1` リージョンに `trandino-repo` という名前で作成)。
+- Google Cloud プロジェクトが有効
+- GCEのAPIが有効
+- 外部IPありでVMを作成
+- Dockerインストール済み
 
 ### デプロイ手順
 
-1.  **イメージのビルドとプッシュ:**
-    プロジェクトルートで以下のコマンドを実行し、Dockerイメージをビルドして Artifact Registry にプッシュします (`PROJECT_ID`, `REGION`, `REPOSITORY_NAME` はご自身の環境に合わせてください)。
-    ```powershell
-    # 例: gcloud builds submit --tag asia-northeast1-docker.pkg.dev/translate-457307/trandino-repo/trandino-bot:latest --project=translate-457307
-    gcloud builds submit --tag [REGION]-docker.pkg.dev/[PROJECT_ID]/[REPOSITORY_NAME]/trandino-bot:latest --project=[PROJECT_ID]
-    ```
+1. **VMインスタンスの作成**
+   ```powershell
+   gcloud compute instances create trandino-bot-vm `
+     --zone=asia-northeast1-a `
+     --machine-type=e2-micro `
+     --image-family=ubuntu-2204-lts `
+     --image-project=ubuntu-os-cloud `
+     --boot-disk-size=20GB `
+     --tags=discord-bot `
+     --scopes=https://www.googleapis.com/auth/cloud-platform
+   ```
 
-2.  **Cloud Run へのデプロイ:**
-    ビルドしたイメージを Cloud Run にデプロイします。
-    **重要:** Discordトークン (`DISCORD_TOKEN`) などの機密情報は、`--set-env-vars` で直接渡すのではなく、**必ず Secret Manager を使用して安全に管理してください**。以下のコマンドは `--set-env-vars` の例ですが、本番環境では `--set-secrets` を使用することを強く推奨します。
+2. **SSHでVMに接続**
+   - GCPコンソールの「VMインスタンス」→ `trandino-bot-vm` の「SSH」ボタン
 
-    ```powershell
-    # --- Secret Managerを使用しない場合の例 (非推奨) ---
-    # gcloud run deploy trandino-bot `
-    #  --image [REGION]-docker.pkg.dev/[PROJECT_ID]/[REPOSITORY_NAME]/trandino-bot:latest `
-    #  --platform managed `
-    #  --region [REGION] `
-    #  --no-allow-unauthenticated `
-    #  --cpu-always-allocated `
-    #  --set-env-vars=DISCORD_TOKEN="YOUR_DISCORD_TOKEN",CLIENT_ID="YOUR_CLIENT_ID",GUILD_ID="YOUR_GUILD_ID",GOOGLE_PROJECT_ID="[PROJECT_ID]",GOOGLE_LOCATION="global",NODE_ENV="production",LOG_LEVEL="info",DATA_DIR="/data" `
-    #  --project=[PROJECT_ID]
+3. **Dockerのインストール**
+   ```bash
+   sudo apt update
+   sudo apt install -y docker.io
+   sudo systemctl enable --now docker
+   sudo usermod -aG docker $USER
+   # 一度ログアウト・再ログインでdockerコマンドが使えるようになります
+   ```
 
-    # --- Secret Managerを使用する場合の例 (推奨) ---
-    # 事前に Secret Manager で DISCORD_TOKEN 等のシークレットを作成しておく必要があります。
-    # 例: gcloud run deploy trandino-bot --image asia-northeast1-docker.pkg.dev/translate-457307/trandino-repo/trandino-bot:latest --platform managed --region asia-northeast1 --no-allow-unauthenticated --cpu-always-allocated --set-secrets=DISCORD_TOKEN=projects/[PROJECT_NUMBER]/secrets/DISCORD_TOKEN:latest --set-env-vars=CLIENT_ID="YOUR_CLIENT_ID",GUILD_ID="YOUR_GUILD_ID",GOOGLE_PROJECT_ID="[PROJECT_ID]",GOOGLE_LOCATION="global",NODE_ENV="production",LOG_LEVEL="info",DATA_DIR="/data" --project=[PROJECT_ID]
-    gcloud run deploy trandino-bot `
-     --image [REGION]-docker.pkg.dev/[PROJECT_ID]/[REPOSITORY_NAME]/trandino-bot:latest `
-     --platform managed `
-     --region [REGION] `
-     --no-allow-unauthenticated `
-     --cpu-always-allocated `
-     --set-secrets=DISCORD_TOKEN=projects/[PROJECT_NUMBER]/secrets/YOUR_DISCORD_TOKEN_SECRET_NAME:latest ` # DiscordトークンをSecret Managerから読み込む
-     --set-env-vars=CLIENT_ID="YOUR_CLIENT_ID",GUILD_ID="YOUR_GUILD_ID",GOOGLE_PROJECT_ID="[PROJECT_ID]",GOOGLE_LOCATION="global",NODE_ENV="production",LOG_LEVEL="info",DATA_DIR="/data" `
-     --project=[PROJECT_ID]
-    ```
-    - `--no-allow-unauthenticated`: ボットは外部からのHTTPリクエストを直接受け付けないため設定。
-    - `--cpu-always-allocated`: ボットを常時稼働させるために設定。
-    - `DATA_DIR="/data"`: Cloud Run環境内のパスを指定していますが、Cloud Runはステートレスなため、このデータは永続化されません。永続化が必要な場合はCloud Storageなどの外部サービスを利用するように実装を変更する必要があります。
+4. **プロジェクトの配置**
+   ```bash
+   git clone https://github.com/olivemochi23/trandino.git
+   cd trandino
+   ```
+
+5. **.envファイルの作成**
+   ```bash
+   nano .env
+   ```
+   Cloud Runで使っていた環境変数を記載
+
+6. **Dockerイメージのビルド**
+   ```bash
+   docker build -t trandino-bot .
+   ```
+
+7. **Dockerコンテナの起動**
+   ```bash
+   docker run --env-file .env --name trandino-bot -d --restart=always trandino-bot
+   ```
+
+8. **ログの確認**
+   ```bash
+   docker logs -f trandino-bot
+   ```
+
+---
 
 ## 📖 コマンド
 

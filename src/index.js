@@ -49,21 +49,27 @@ logger.info(`環境変数: GOOGLE_PROJECT_ID=${process.env.GOOGLE_PROJECT_ID}, G
 // ボットの起動
 async function startBot() {
   try {
-    logger.info('翻訳ボットを起動しています...');
-    
+    logger.info('ボットを起動しています...');
+
     // 環境変数チェック
+    logger.info('環境変数をチェックしています...');
     if (!config.token) {
       throw new Error('DISCORD_TOKENが設定されていません。.envファイルを確認してください。');
     }
-    
+
     if (!config.translation.apiKey && !config.translation.projectId) {
       logger.warn('GOOGLE_API_KEY または GOOGLE_PROJECT_ID が設定されていません。翻訳機能が動作しない可能性があります。');
     }
-    
+    logger.info('環境変数のチェックが完了しました。');
+
     // ボットのインスタンス作成と起動
+    logger.info('Botのインスタンスを作成しています...');
     const bot = new Bot(config);
+    logger.info('Botのインスタンスを作成しました。');
+    logger.info('bot.start() を呼び出しています...');
     await bot.start();
-    
+    logger.info('bot.start() が完了しました。ボットは正常に起動しました。');
+
     // 終了ハンドリング
     process.on('SIGINT', () => {
       logger.info('SIGINTシグナルを受信しました。ボットを停止します...');
@@ -76,7 +82,7 @@ async function startBot() {
     });
     
   } catch (error) {
-    logger.error('ボットの起動に失敗しました:', error);
+    logger.error('startBot関数でエラーが発生しました:', error.stack || error);
     process.exit(1);
   }
 }
@@ -111,7 +117,10 @@ server.on('error', (err) => {
 server.listen(port, () => {
   logger.info(`Dummy HTTP server listening on port ${port}`);
   // listen完了後にボット起動
+  logger.info('startBot() を呼び出しています...');
   startBot().catch(err => {
-    logger.error('ボット起動中にエラーが発生しました:', err);
+    logger.error('ボット起動中に予期せぬエラーが発生しました:', err.stack || err);
+    // ここで process.exit(1) を呼び出すと、再起動ループになる可能性があるため注意
+    // 必要であれば、エラーに応じた終了処理を検討
   });
 });
