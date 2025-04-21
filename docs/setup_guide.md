@@ -596,26 +596,31 @@ CMD ["npm", "start"]
 - 2025年現在、`npm ci --omit=dev`で本番用依存のみインストールが推奨です。
 
 #### b. イメージビルド＆デプロイ
-Cloud Shellまたはローカルで：
-```bash
-gcloud builds submit --tag gcr.io/<YOUR_PROJECT_ID>/trandino-bot
-```
+Cloud Shellまたはローカルで以下を実行します。`[PROJECT_ID]`, `[REGION]`, `[REPOSITORY_NAME]`, `[PROJECT_NUMBER]` はご自身の環境に合わせて置き換えてください。
 
-```bash
-gcloud run deploy trandino-bot \
-  --image gcr.io/<YOUR_PROJECT_ID>/trandino-bot \
-  --platform managed \
-  --region asia-northeast1 \
-  --allow-unauthenticated \
-  --service-account <サービスアカウントメール> \
-  --set-secrets DISCORD_TOKEN=projects/<PROJECT_NUM>/secrets/DISCORD_TOKEN:latest,GOOGLE_APPLICATION_CREDENTIALS=projects/<PROJECT_NUM>/secrets/GOOGLE_APPLICATION_CREDENTIALS:latest
-```
-- 環境変数は`--set-env-vars`またはSecret Manager連携（`--set-secrets`）で渡します。
-- DiscordトークンやGoogle認証情報はSecret Managerで管理し、直接環境変数やファイルで渡さないのが推奨です。
-- `--allow-unauthenticated`は外部からのアクセスを許可（Bot用途ならOK）。
+1.  **イメージのビルドとプッシュ:**
+    ```powershell
+    # 例: gcloud builds submit --tag asia-northeast1-docker.pkg.dev/translate-457307/trandino-repo/trandino-bot:latest --project=translate-457307
+    gcloud builds submit --tag [REGION]-docker.pkg.dev/[PROJECT_ID]/[REPOSITORY_NAME]/trandino-bot:latest --project=[PROJECT_ID]
+    ```
 
-#### c. ポート番号
-Cloud Runはデフォルトで`PORT`環境変数を渡しますが、Discord Botは外部HTTPリクエストを受けないため、特別なWebhook等がなければNode.js側でlisten不要です。
+2.  **Cloud Run へのデプロイ:**
+    - **重要:** Discordトークン (`DISCORD_TOKEN`) は非常に機密性の高い情報です。**必ず Secret Manager を使用して管理してください**。
+    - 以下のコマンドは Secret Manager を使用する推奨例です。事前に `DISCORD_TOKEN` という名前 (または任意の名前) でシークレットを作成しておく必要があります。
+    - その他の環境変数 (`CLIENT_ID`, `GUILD_ID` など) も必要に応じて Secret Manager で管理できますが、ここでは `--set-env-vars` で設定する例を示します。
+
+    ```powershell
+    # 例: gcloud run deploy trandino-bot --image asia-northeast1-docker.pkg.dev/translate-457307/trandino-repo/trandino-bot:latest --platform managed --region asia-northeast1 --no-allow-unauthenticated --cpu-always-allocated --set-secrets=DISCORD_TOKEN=projects/825359036775/secrets/DISCORD_TOKEN:latest --set-env-vars=CLIENT_ID="YOUR_CLIENT_ID",GUILD_ID="YOUR_GUILD_ID",GOOGLE_PROJECT_ID="translate-457307",GOOGLE_LOCATION="global",NODE_ENV="production",LOG_LEVEL="info",DATA_DIR="/data" --project=translate-457307
+    gcloud run deploy trandino-bot `
+     --image [REGION]-docker.pkg.dev/[PROJECT_ID]/[REPOSITORY_NAME]/trandino-bot:latest `
+     --platform managed `
+     --region [REGION] `
+     --no-allow-unauthenticated ` # 外部からのHTTPアクセスを許可しない
+     --cpu-always-allocated `     # 常時稼働させる
+     --set-secrets=DISCORD_TOKEN=projects/[PROJECT_NUMBER]/secrets/YOUR_DISCORD_TOKEN_SECRET_NAME:latest ` # Secret Manager からトークンを読み込む
+     --set-env-vars=CLIENT_ID="YOUR_CLIENT_ID",GUILD_ID="YOUR_GUILD_ID",GOOGLE_PROJECT_ID="[PROJECT_ID]",GOOGLE_LOCATION="global",NODE_ENV="production",LOG_LEVEL="info",DATA_DIR="/data" ` # その他の環境変数
+     --project=[PROJECT_ID]
+    ```
 
 ### 5.2 Compute Engine（VM）
 1. インスタンス作成（Ubuntu 22.04 LTS等、e2-microでOK）
@@ -627,16 +632,17 @@ Cloud Runはデフォルトで`PORT`環境変数を渡しますが、Discord Bot
 ---
 
 ## 6. 環境変数・シークレット管理
-- Cloud Runの場合：[Secret Manager](https://cloud.google.com/secret-manager)と連携し、`--set-secrets`で渡すのが推奨
-- Compute Engineの場合：`.env`ファイルをサーバーに安全に配置、またはSecret Manager連携
-- **APIキーやトークンは絶対にGit等で公開しないこと**
+- Cloud Runの場合：**強く推奨される方法**として、[Secret Manager](https://cloud.google.com/secret-manager) を利用し、`gcloud run deploy` 時に `--set-secrets` オプションで機密情報 (特に `DISCORD_TOKEN`) をコンテナにマウントします。これにより、環境変数に直接機密情報が含まれることを避けられます。
+- Compute Engineの場合：`.env`ファイルをサーバーに安全に配置するか、可能であれば Secret Manager と連携するスクリプトを使用します。
+- **APIキーやトークンは絶対にGit等のバージョン管理システムにコミットしないでください**。
+- 以前使用していた `GOOGLE_APPLICATION_CREDENTIALS` や `GOOGLE_API_KEY` は、GCP環境 (Cloud Run, Compute Engine) で実行する場合、通常はApplication Default Credentials (ADC) が利用されるため不要です。ローカル開発で特定のサービスアカウントキーを使いたい場合のみ `GOOGLE_APPLICATION_CREDENTIALS` を設定します。
 
 ---
 
 ## 7. 永続化（データ/ログ）
-- `data/`や`logs/`ディレクトリを永続化したい場合、Cloud Storageバケットと連携するか、Compute Engineの永続ディスクを利用
-- Cloud Runはステートレスなので、永続データはCloud Storage等に保存する設計が推奨
-- ログはCloud Loggingに自動送信されます
+- `data/` や `logs/` ディレクトリなど、コンテナ内で生成・変更されるデータを永続化したい場合は、Cloud Storageバケットなどの外部ストレージサービスと連携するようにアプリケーションを実装する必要があります。
+- **Cloud Run はステートレスな環境です。** 各インスタンスは独立しており、インスタンスが再起動されるとローカルファイルシステムの変更は失われます。`DATA_DIR` に設定したパスも永続化されません。
+- ログはデフォルトで Cloud Logging に自動的に収集されるため、通常はファイルへのログ出力と永続化は不要です。
 
 ---
 

@@ -27,10 +27,15 @@ TranDinoは、Discordサーバー内のメッセージを自動的に検出し�
 
 - Node.js v20.0.0 以上
 - npm (Node.jsに同梱)
+- Git
 - Discord Botアカウント ([Discord Developer Portal](https://discord.com/developers/applications) で作成)
 - Google Cloud Platformアカウント
     - Cloud Translation API の有効化
-    - APIキーの取得 ([Google Cloud Console](https://console.cloud.google.com/))
+    - Cloud Run API の有効化
+    - Artifact Registry API の有効化
+    - (推奨) Secret Manager API の有効化
+- Google Cloud CLI (`gcloud`)
+- Docker
 
 ### インストール
 
@@ -51,12 +56,15 @@ TranDinoは、Discordサーバー内のメッセージを自動的に検出し�
     cp .env.example .env
     ```
 2.  `.env` ファイルを開き、以下の環境変数を設定します。
-    - `DISCORD_TOKEN`: Discordボットのトークン
+    - `DISCORD_TOKEN`: Discordボットのトークン (**重要:** Gitにコミットしないでください)
     - `CLIENT_ID`: DiscordボットのクライアントID
     - `GUILD_ID`: (開発時) テストサーバーのID
-    - `GOOGLE_API_KEY`: Google Cloud Translation APIのAPIキー
-    - (オプション) `GOOGLE_PROJECT_ID`: Google CloudプロジェクトID (APIキーの代わりにADCを使用する場合)
-    - (オプション) キャッシュ設定やログレベルなど、その他の設定を必要に応じて変更します。
+    - `GOOGLE_PROJECT_ID`: Google CloudプロジェクトID (APIキーの代わりにADCを使用する場合に推奨)
+    - `GOOGLE_LOCATION`: (通常 `global`) Google Cloud Translation APIのロケーション
+    - `NODE_ENV`: (通常 `development` または `production`)
+    - `LOG_LEVEL`: (例: `info`, `debug`)
+    - `DATA_DIR`: (例: `./data`)
+    - **注意:** 以前のバージョンで使用していた `GOOGLE_API_KEY` や `GOOGLE_APPLICATION_CREDENTIALS` は、GCP環境 (Cloud Runなど) で実行する場合は通常不要です (Application Default Credentials (ADC) が自動的に使用されます)。ローカル開発でサービスアカウントキーファイルを使用する場合のみ `GOOGLE_APPLICATION_CREDENTIALS` を設定してください。
 
 ### スラッシュコマンドの登録
 
@@ -81,6 +89,57 @@ npm start
 ```bash
 npm run dev
 ```
+
+## ☁️ GCP (Cloud Run) へのデプロイ
+
+このボットは Google Cloud Run にデプロイして運用することを推奨します。
+
+### 前提条件
+
+- 上記「セットアップ」の前提条件を満たしていること。
+- GCPプロジェクトで課金が有効になっていること。
+- Dockerイメージをプッシュするための Artifact Registry リポジトリが作成されていること (例: `asia-northeast1` リージョンに `trandino-repo` という名前で作成)。
+
+### デプロイ手順
+
+1.  **イメージのビルドとプッシュ:**
+    プロジェクトルートで以下のコマンドを実行し、Dockerイメージをビルドして Artifact Registry にプッシュします (`PROJECT_ID`, `REGION`, `REPOSITORY_NAME` はご自身の環境に合わせてください)。
+    ```powershell
+    # 例: gcloud builds submit --tag asia-northeast1-docker.pkg.dev/translate-457307/trandino-repo/trandino-bot:latest --project=translate-457307
+    gcloud builds submit --tag [REGION]-docker.pkg.dev/[PROJECT_ID]/[REPOSITORY_NAME]/trandino-bot:latest --project=[PROJECT_ID]
+    ```
+
+2.  **Cloud Run へのデプロイ:**
+    ビルドしたイメージを Cloud Run にデプロイします。
+    **重要:** Discordトークン (`DISCORD_TOKEN`) などの機密情報は、`--set-env-vars` で直接渡すのではなく、**必ず Secret Manager を使用して安全に管理してください**。以下のコマンドは `--set-env-vars` の例ですが、本番環境では `--set-secrets` を使用することを強く推奨します。
+
+    ```powershell
+    # --- Secret Managerを使用しない場合の例 (非推奨) ---
+    # gcloud run deploy trandino-bot `
+    #  --image [REGION]-docker.pkg.dev/[PROJECT_ID]/[REPOSITORY_NAME]/trandino-bot:latest `
+    #  --platform managed `
+    #  --region [REGION] `
+    #  --no-allow-unauthenticated `
+    #  --cpu-always-allocated `
+    #  --set-env-vars=DISCORD_TOKEN="YOUR_DISCORD_TOKEN",CLIENT_ID="YOUR_CLIENT_ID",GUILD_ID="YOUR_GUILD_ID",GOOGLE_PROJECT_ID="[PROJECT_ID]",GOOGLE_LOCATION="global",NODE_ENV="production",LOG_LEVEL="info",DATA_DIR="/data" `
+    #  --project=[PROJECT_ID]
+
+    # --- Secret Managerを使用する場合の例 (推奨) ---
+    # 事前に Secret Manager で DISCORD_TOKEN 等のシークレットを作成しておく必要があります。
+    # 例: gcloud run deploy trandino-bot --image asia-northeast1-docker.pkg.dev/translate-457307/trandino-repo/trandino-bot:latest --platform managed --region asia-northeast1 --no-allow-unauthenticated --cpu-always-allocated --set-secrets=DISCORD_TOKEN=projects/[PROJECT_NUMBER]/secrets/DISCORD_TOKEN:latest --set-env-vars=CLIENT_ID="YOUR_CLIENT_ID",GUILD_ID="YOUR_GUILD_ID",GOOGLE_PROJECT_ID="[PROJECT_ID]",GOOGLE_LOCATION="global",NODE_ENV="production",LOG_LEVEL="info",DATA_DIR="/data" --project=[PROJECT_ID]
+    gcloud run deploy trandino-bot `
+     --image [REGION]-docker.pkg.dev/[PROJECT_ID]/[REPOSITORY_NAME]/trandino-bot:latest `
+     --platform managed `
+     --region [REGION] `
+     --no-allow-unauthenticated `
+     --cpu-always-allocated `
+     --set-secrets=DISCORD_TOKEN=projects/[PROJECT_NUMBER]/secrets/YOUR_DISCORD_TOKEN_SECRET_NAME:latest ` # DiscordトークンをSecret Managerから読み込む
+     --set-env-vars=CLIENT_ID="YOUR_CLIENT_ID",GUILD_ID="YOUR_GUILD_ID",GOOGLE_PROJECT_ID="[PROJECT_ID]",GOOGLE_LOCATION="global",NODE_ENV="production",LOG_LEVEL="info",DATA_DIR="/data" `
+     --project=[PROJECT_ID]
+    ```
+    - `--no-allow-unauthenticated`: ボットは外部からのHTTPリクエストを直接受け付けないため設定。
+    - `--cpu-always-allocated`: ボットを常時稼働させるために設定。
+    - `DATA_DIR="/data"`: Cloud Run環境内のパスを指定していますが、Cloud Runはステートレスなため、このデータは永続化されません。永続化が必要な場合はCloud Storageなどの外部サービスを利用するように実装を変更する必要があります。
 
 ## 📖 コマンド
 
