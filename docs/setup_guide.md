@@ -521,3 +521,149 @@ node src/translation-test.js
 ---
 
 これで2025年現在の開発環境構築とAPI設定は完了です。この環境をベースに、実装計画書に記載された機能開発を進めていくことができます。何か問題がある場合は、このトラブルシューティングセクションを参照するか、各サービスの公式ドキュメントを確認してください。 
+
+# GCP（Google Cloud Platform）でTranDino Discordボットをホストする手順ガイド（2025年4月最新版）
+
+---
+
+## 目次
+1. 概要
+2. GCPプロジェクトの作成
+3. 必要APIの有効化（2025年4月現在）
+4. サービスアカウントと権限設定
+5. デプロイ方法（Cloud Run推奨／Compute Engine補足）
+6. 環境変数・シークレット管理
+7. 永続化（データ/ログ）
+8. 運用・監視・自動再起動
+9. セキュリティの注意点
+10. 参考リンク
+
+---
+
+## 1. 概要
+
+TranDinoはNode.js製のDiscord翻訳ボットです。GCP上で24時間安定稼働させるには、
+- Cloud Run（推奨：サーバーレス、スケーラブル、管理不要）
+- Compute Engine（VM：自由度高いが運用負荷あり）
+のいずれかでホストできます。
+
+---
+
+## 2. GCPプロジェクトの作成
+1. [Google Cloud Console](https://console.cloud.google.com/)にアクセスし、プロジェクトを新規作成。
+2. 請求先アカウントを紐付ける（無料枠あり）。
+
+---
+
+## 3. 必要APIの有効化（2025年4月現在）
+- **Cloud Run Admin API**（旧Cloud Run API、2025年4月現在はこちらを有効化）
+- **Cloud Translation API**（翻訳用）
+- **Artifact Registry API**（Cloud RunでDockerイメージを使う場合）
+- **Cloud Logging API, Cloud Monitoring API**（運用監視用）
+- **Compute Engine API**（VM利用時のみ）
+
+GCPコンソール「APIとサービス」→「APIとサービスの有効化」から検索して有効化してください。
+- Cloud Run APIは「Cloud Run Admin API」として表示されます。
+- 画像にある「Cloud Deploy API」や「GKE Multi-Cloud API」は本プロジェクトには不要です。
+
+---
+
+## 4. サービスアカウントと権限設定
+- Cloud Run/Compute Engineで実行するサービスアカウントを作成。
+- 必要なロール例：
+  - Cloud Run Invoker
+  - Cloud Run Admin（Cloud Runの管理が必要な場合）
+  - Storage Object Viewer（永続化が必要な場合）
+  - Cloud Translation API User
+- サービスアカウントキー（JSON）は**.envやコードに直書きせず、GCPのSecret Managerや環境変数で安全に管理**。
+- Cloud Runの場合、サービスアカウントキーを使わずに「サービスアカウントの割り当て」＋「Secret Manager連携」でセキュアに運用するのが推奨です。
+
+---
+
+## 5. デプロイ方法
+
+### 5.1 Cloud Run（推奨）
+#### a. Dockerfileの用意
+プロジェクトルートに以下のようなDockerfileを作成：
+```Dockerfile
+FROM node:20
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY . .
+CMD ["npm", "start"]
+```
+- 2025年現在、`npm ci --omit=dev`で本番用依存のみインストールが推奨です。
+
+#### b. イメージビルド＆デプロイ
+Cloud Shellまたはローカルで：
+```bash
+gcloud builds submit --tag gcr.io/<YOUR_PROJECT_ID>/trandino-bot
+```
+
+```bash
+gcloud run deploy trandino-bot \
+  --image gcr.io/<YOUR_PROJECT_ID>/trandino-bot \
+  --platform managed \
+  --region asia-northeast1 \
+  --allow-unauthenticated \
+  --service-account <サービスアカウントメール> \
+  --set-secrets DISCORD_TOKEN=projects/<PROJECT_NUM>/secrets/DISCORD_TOKEN:latest,GOOGLE_APPLICATION_CREDENTIALS=projects/<PROJECT_NUM>/secrets/GOOGLE_APPLICATION_CREDENTIALS:latest
+```
+- 環境変数は`--set-env-vars`またはSecret Manager連携（`--set-secrets`）で渡します。
+- DiscordトークンやGoogle認証情報はSecret Managerで管理し、直接環境変数やファイルで渡さないのが推奨です。
+- `--allow-unauthenticated`は外部からのアクセスを許可（Bot用途ならOK）。
+
+#### c. ポート番号
+Cloud Runはデフォルトで`PORT`環境変数を渡しますが、Discord Botは外部HTTPリクエストを受けないため、特別なWebhook等がなければNode.js側でlisten不要です。
+
+### 5.2 Compute Engine（VM）
+1. インスタンス作成（Ubuntu 22.04 LTS等、e2-microでOK）
+2. SSHでログインし、Node.js, npm, gitをインストール
+3. リポジトリをcloneし、`npm ci`、`.env`またはSecret Manager連携を設定
+4. `npm start`で起動
+5. `pm2`や`systemd`でプロセスを常駐化
+
+---
+
+## 6. 環境変数・シークレット管理
+- Cloud Runの場合：[Secret Manager](https://cloud.google.com/secret-manager)と連携し、`--set-secrets`で渡すのが推奨
+- Compute Engineの場合：`.env`ファイルをサーバーに安全に配置、またはSecret Manager連携
+- **APIキーやトークンは絶対にGit等で公開しないこと**
+
+---
+
+## 7. 永続化（データ/ログ）
+- `data/`や`logs/`ディレクトリを永続化したい場合、Cloud Storageバケットと連携するか、Compute Engineの永続ディスクを利用
+- Cloud Runはステートレスなので、永続データはCloud Storage等に保存する設計が推奨
+- ログはCloud Loggingに自動送信されます
+
+---
+
+## 8. 運用・監視・自動再起動
+- Cloud Run/Compute EngineともにCloud Logging/Monitoringでログ・メトリクス監視が可能
+- Compute Engineの場合は`pm2`や`systemd`で自動再起動設定推奨
+- Cloud Runは自動スケール・自動再起動
+- 必要に応じてアラートポリシーを設定
+
+---
+
+## 9. セキュリティの注意点
+- APIキー・トークンはSecret Managerや環境変数で安全に管理
+- Discord Botの権限は最小限に
+- GCP IAMロールも最小権限で
+- 外部公開する場合はファイアウォールや認証設定も検討
+- サービスアカウントの権限は必要最小限に
+
+---
+
+## 10. 参考リンク
+- [Google Cloud公式: Node.jsアプリのCloud Runデプロイ](https://cloud.google.com/run/docs/quickstarts/build-and-deploy/deploy-nodejs-service)
+- [Google Cloud公式: Compute EngineでNode.jsアプリを動かす](https://cloud.google.com/compute/docs/instances/)
+- [Secret Managerの使い方](https://cloud.google.com/secret-manager/docs/creating-and-accessing-secrets)
+- [Cloud Translation APIの有効化](https://console.cloud.google.com/apis/library/translate.googleapis.com)
+- [Discord Bot公式ドキュメント](https://discord.com/developers/docs/intro)
+
+---
+
+このガイドは2024年7月時点の情報を元にしています。GCPの仕様変更等があれば公式ドキュメントもご参照ください。 
