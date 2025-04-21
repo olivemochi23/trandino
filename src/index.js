@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { Bot } from './bot.js';
 import logger from './utils/logger.js';
+import http from 'http';
 
 // アプリケーション設定の構築
 const config = {
@@ -39,6 +40,11 @@ const config = {
     logDir: './logs',
   },
 };
+
+// 環境変数をログに出力（トークンは最初の数文字のみ）
+logger.info(`環境変数: DISCORD_TOKEN=${config.token ? config.token.substring(0, 5) + '...' : 'undefined'}, CLIENT_ID=${process.env.CLIENT_ID || 'undefined'}, GUILD_ID=${process.env.GUILD_ID || 'undefined'}`);
+logger.info(`環境変数: NODE_ENV=${process.env.NODE_ENV}, LOG_LEVEL=${process.env.LOG_LEVEL}, DATA_DIR=${process.env.DATA_DIR}`);
+logger.info(`環境変数: GOOGLE_PROJECT_ID=${process.env.GOOGLE_PROJECT_ID}, GOOGLE_LOCATION=${process.env.GOOGLE_LOCATION}`);
 
 // ボットの起動
 async function startBot() {
@@ -85,5 +91,27 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
-// ボットを起動
-startBot();
+// Cloud Run用ダミーHTTPサーバー（listen完了後にボット起動）
+const port = parseInt(process.env.PORT || '8080', 10);
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Dummy server for Cloud Run health check\n');
+});
+
+// エラーハンドリングを強化
+server.on('error', (err) => {
+  logger.error(`HTTPサーバーエラー: ${err.message}`);
+  // エラーの種類に応じて対応
+  if (err.code === 'EADDRINUSE') {
+    logger.error(`ポート ${port} は既に使用されています。`);
+    // 別のポートを試す場合はここに実装
+  }
+});
+
+server.listen(port, () => {
+  logger.info(`Dummy HTTP server listening on port ${port}`);
+  // listen完了後にボット起動
+  startBot().catch(err => {
+    logger.error('ボット起動中にエラーが発生しました:', err);
+  });
+});

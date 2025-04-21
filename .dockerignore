@@ -1,0 +1,16 @@
+.git
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs
+.env
+.env.example
+.vscode
+Dockerfile
+.dockerignore
+README.md
+tests
+src/tests
+.github
+docs 
